@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CLIENT
+  TECH
+  ADMIN
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum JobStatus {
+  WAITING
+  ACTIVE
+  RETRYING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id            String         @id @default(uuid())
+  name          String
+  email         String         @unique
+  passwordHash  String
+  role          Role           @default(CLIENT)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  refreshTokens RefreshToken[]
+  ticketsCreated  Ticket[]     @relation("TicketCreatedBy")
+  ticketsAssigned Ticket[]     @relation("TicketAssignedTo")
+
+  @@index([role, isActive])
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid())
+  tokenHash    String    @unique          // sha256 del token; nunca el valor plano
+  familyId     String                     // misma familia en toda la cadena de rotación
+  userId       String
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?   @unique          // token que lo reemplazó al rotar
+  createdAt    DateTime  @default(now())
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("Rotation", fields: [replacedById], references: [id])
+  replaces   RefreshToken? @relation("Rotation")
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+model Ticket {
+  id           String       @id @default(uuid())
+  title        String       @db.VarChar(150)
+  description  String
+  priority     Priority     @default(MEDIUM)
+  status       TicketStatus @default(OPEN)
+  createdById  String
+  assignedToId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  createdBy  User     @relation("TicketCreatedBy", fields: [createdById], references: [id])
+  assignedTo User?    @relation("TicketAssignedTo", fields: [assignedToId], references: [id])
+  jobLogs    JobLog[]
+
+  @@index([createdById])
+  @@index([assignedToId, status])   // conteo de carga por técnico
+  @@index([status, priority])
+}
+
+model JobLog {
+  id         String    @id @default(uuid())
+  queue      String                    // "ticket-assignment" | "notifications"
+  jobId      String
+  name       String                    // assign | ticket-created | ticket-assigned | status-changed
+  ticketId   String?
+  status     JobStatus @default(WAITING)
+  attempts   Int       @default(0)
+  error      String?
+  payload    Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@unique([queue, jobId])
+  @@index([ticketId])
+  @@index([status, queue])
+}
